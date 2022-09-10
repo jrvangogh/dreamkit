@@ -108,7 +108,7 @@ class Dreamer:
     def cond_latents_to_image(self, cond_latents):
         # scale and decode the image latents with vae
         cond_latents = 1 / 0.18215 * cond_latents
-        img_arr = self.pipe.vae.decode(cond_latents)
+        img_arr = self.pipe.vae.decode(cond_latents)['sample']
         # generate output numpy image as uint8
         img_arr = (img_arr / 2 + 0.5).clamp(0, 1)
         img_arr = img_arr.cpu().permute(0, 2, 3, 1).numpy()

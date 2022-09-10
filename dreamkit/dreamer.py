@@ -93,22 +93,22 @@ class Dreamer:
             latent_model_input = latent_model_input / ((sigma ** 2 + 1) ** 0.5)
 
         # predict the noise residual
-        noise_pred = self.pipe.unet(latent_model_input, t, encoder_hidden_states=text_embeddings)["sample"]
+        noise_pred = self.pipe.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         # compute the previous noisy sample x_t -> x_t-1
         if isinstance(self.pipe.scheduler, LMSDiscreteScheduler):
-            cond_latents = self.pipe.scheduler.step(noise_pred, i, cond_latents, **step_kwargs)["prev_sample"]
+            cond_latents = self.pipe.scheduler.step(noise_pred, i, cond_latents, **step_kwargs).prev_sample
         else:
-            cond_latents = self.pipe.scheduler.step(noise_pred, t, cond_latents, **step_kwargs)["prev_sample"]
+            cond_latents = self.pipe.scheduler.step(noise_pred, t, cond_latents, **step_kwargs).prev_sample
         return cond_latents
 
     @torch.no_grad()
     def cond_latents_to_image(self, cond_latents):
         # scale and decode the image latents with vae
         cond_latents = 1 / 0.18215 * cond_latents
-        img_arr = self.pipe.vae.decode(cond_latents)['sample']
+        img_arr = self.pipe.vae.decode(cond_latents).sample
         # generate output numpy image as uint8
         img_arr = (img_arr / 2 + 0.5).clamp(0, 1)
         img_arr = img_arr.cpu().permute(0, 2, 3, 1).numpy()
@@ -229,7 +229,7 @@ class Dreamer:
         with autocast('cuda'):
             # preprocess init image and create starting latent
             preprocessed_image = preprocess_image(init_image, resize=resize_image)
-            base_latent = 0.18215 * self.pipe.vae.encode(preprocessed_image.to(self.device)).sample()
+            base_latent = 0.18215 * self.pipe.vae.encode(preprocessed_image.to(self.device)).latent_dist.sample()
 
             # get starting point based on strength
             offset, _ = self.init_scheduler(eta, num_inference_steps)

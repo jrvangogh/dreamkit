@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import os
 import inspect
-from diffusers import StableDiffusionPipeline
-from diffusers.schedulers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler
-from PIL import Image
+import os
+
 import numpy as np
 import torch
+from diffusers import StableDiffusionPipeline
+from diffusers.schedulers import LMSDiscreteScheduler
+from PIL import Image
 from torch import autocast
 from tqdm.auto import tqdm
-from dreamkit.utils import slerp, preprocess_image
+
+from dreamkit.utils import preprocess_image
+from dreamkit.utils import slerp
 
 
 DEFAULT_MODELHUB_NAME = 'CompVis/stable-diffusion-v1-4'
@@ -17,7 +20,6 @@ DEFAULT_DEVICE = 'cuda'
 
 
 class Dreamer:
-
     def __init__(
         self,
         root_output_dir: str,
@@ -28,7 +30,9 @@ class Dreamer:
         self.root_output_dir = root_output_dir
         os.makedirs(self.root_output_dir, exist_ok=True)
         if use_fp16:
-            self.pipe = StableDiffusionPipeline.from_pretrained(modelhub_name, revision="fp16", torch_dtype=torch.float16, use_auth_token=True)
+            self.pipe = StableDiffusionPipeline.from_pretrained(
+                modelhub_name, revision="fp16", torch_dtype=torch.float16, use_auth_token=True
+            )
         else:
             self.pipe = StableDiffusionPipeline.from_pretrained(modelhub_name, use_auth_token=True)
         self.device = device
@@ -37,7 +41,9 @@ class Dreamer:
         self.pipe.text_encoder.to(self.device)
 
     def init_scheduler(self, eta: float, num_inference_steps: int):
-        accepts_offset = "offset" in set(inspect.signature(self.pipe.scheduler.set_timesteps).parameters.keys())
+        accepts_offset = "offset" in set(
+            inspect.signature(self.pipe.scheduler.set_timesteps).parameters.keys()
+        )
         extra_set_kwargs = {}
         if accepts_offset:
             offset = 1
@@ -45,9 +51,9 @@ class Dreamer:
         else:
             offset = 0
         self.pipe.scheduler.set_timesteps(num_inference_steps, **extra_set_kwargs)
-        # prepare extra kwargs for the scheduler step, since not all schedulers have the same signature
-        # eta (η) is only used with the DDIMScheduler, it will be ignored for other schedulers.
-        # eta corresponds to η in DDIM paper: https://arxiv.org/abs/2010.02502
+        # prepare extra kwargs for the scheduler step, since not all schedulers have the same
+        # signature eta (η) is only used with the DDIMScheduler, it will be ignored for other
+        # schedulers. eta corresponds to η in DDIM paper: https://arxiv.org/abs/2010.02502
         # and should be between [0, 1]
         accepts_eta = "eta" in set(inspect.signature(self.pipe.scheduler.step).parameters.keys())
         extra_step_kwargs = {}
@@ -74,14 +80,16 @@ class Dreamer:
             padding="max_length",
             max_length=self.pipe.tokenizer.model_max_length,
             truncation=True,
-            return_tensors="pt"
+            return_tensors="pt",
         )
         embed = self.pipe.text_encoder(text_input.input_ids.to(self.device))[0]
         return embed
 
     @torch.no_grad()
     def gen_uncond_embedding(self, max_length: int):
-        uncond_input = self.pipe.tokenizer([""], padding="max_length", max_length=max_length, return_tensors="pt")
+        uncond_input = self.pipe.tokenizer(
+            [""], padding="max_length", max_length=max_length, return_tensors="pt"
+        )
         return self.pipe.text_encoder(uncond_input.input_ids.to(self.device))[0]
 
     @torch.no_grad()
@@ -90,18 +98,24 @@ class Dreamer:
         latent_model_input = torch.cat([cond_latents] * 2)
         if isinstance(self.pipe.scheduler, LMSDiscreteScheduler):
             sigma = self.pipe.scheduler.sigmas[i]
-            latent_model_input = latent_model_input / ((sigma ** 2 + 1) ** 0.5)
+            latent_model_input = latent_model_input / ((sigma**2 + 1) ** 0.5)
 
         # predict the noise residual
-        noise_pred = self.pipe.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+        noise_pred = self.pipe.unet(
+            latent_model_input, t, encoder_hidden_states=text_embeddings
+        ).sample
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         # compute the previous noisy sample x_t -> x_t-1
         if isinstance(self.pipe.scheduler, LMSDiscreteScheduler):
-            cond_latents = self.pipe.scheduler.step(noise_pred, i, cond_latents, **step_kwargs).prev_sample
+            cond_latents = self.pipe.scheduler.step(
+                noise_pred, i, cond_latents, **step_kwargs
+            ).prev_sample
         else:
-            cond_latents = self.pipe.scheduler.step(noise_pred, t, cond_latents, **step_kwargs).prev_sample
+            cond_latents = self.pipe.scheduler.step(
+                noise_pred, t, cond_latents, **step_kwargs
+            ).prev_sample
         return cond_latents
 
     @torch.no_grad()
@@ -119,7 +133,7 @@ class Dreamer:
     def diffuse(
         self,
         text_embedding,  # text conditioning, should be (1, 77, 768)
-        cond_latents,    # image conditioning, should be (1, 4, 64, 64)
+        cond_latents,  # image conditioning, should be (1, 4, 64, 64)
         num_inference_steps,
         guidance_scale,
         eta,
@@ -142,7 +156,13 @@ class Dreamer:
         # init scheduler and diffuse
         _, extra_step_kwargs = self.init_scheduler(eta, num_inference_steps)
         timesteps = self.pipe.scheduler.timesteps
-        for i, t in tqdm(enumerate(timesteps[start_timestep:]), total=len(timesteps)-start_timestep, desc='diffuse', position=tqdm_position, leave=False):
+        for i, t in tqdm(
+            enumerate(timesteps[start_timestep:]),
+            total=len(timesteps) - start_timestep,
+            desc='diffuse',
+            position=tqdm_position,
+            leave=False,
+        ):
             if save_frequency and i % save_frequency == 0:
                 image = self.cond_latents_to_image(cond_latents)
                 image.save(
@@ -150,7 +170,9 @@ class Dreamer:
                     optimize=True,
                     jpq_quality=jpg_quality,
                 )
-            cond_latents = self.diffuse_step(i, t, guidance_scale, cond_latents, text_embeddings, **extra_step_kwargs)
+            cond_latents = self.diffuse_step(
+                i, t, guidance_scale, cond_latents, text_embeddings, **extra_step_kwargs
+            )
 
         image = self.cond_latents_to_image(cond_latents)
         image.save(
@@ -206,7 +228,7 @@ class Dreamer:
         prompt: str,
         seed: int,
         init_image: Image,
-        init_image_strength: float = 0.2,  # higher values make the output image match the input more closely
+        init_image_strength: float = 0.2,
         resize_image: bool = False,
         num_inference_steps: int = 50,
         guidance_scale: float = 7.5,
@@ -229,11 +251,16 @@ class Dreamer:
         with autocast('cuda'):
             # preprocess init image and create starting latent
             preprocessed_image = preprocess_image(init_image, resize=resize_image)
-            base_latent = 0.18215 * self.pipe.vae.encode(preprocessed_image.to(self.device)).latent_dist.sample()
+            base_latent = (
+                0.18215
+                * self.pipe.vae.encode(preprocessed_image.to(self.device)).latent_dist.sample()
+            )
 
             # get starting point based on strength
             offset, _ = self.init_scheduler(eta, num_inference_steps)
-            init_timestep = min(int(num_inference_steps * (1 - init_image_strength)) + offset, num_inference_steps)
+            init_timestep = min(
+                int(num_inference_steps * (1 - init_image_strength)) + offset, num_inference_steps
+            )
             timesteps = torch.tensor(
                 [self.pipe.scheduler.timesteps[-init_timestep]],
                 dtype=torch.long,
@@ -265,7 +292,7 @@ class Dreamer:
 
     def animate_random_walk(
         self,
-        name: str,    # name of this project, subdirectory in the root directory
+        name: str,  # name of this project, subdirectory in the root directory
         prompt: str,  # prompts to dream about
         seed: int,
         walk_std: float = 0.1,
@@ -279,12 +306,13 @@ class Dreamer:
     ):
         """This doesn't work as well as hoped.
 
-        If you want to explore a single prompt, just use animate_interpolate. Pass in the same prompt multiple times,
-        but use different seeds.
+        If you want to explore a single prompt, just use animate_interpolate. Pass in the same
+        prompt multiple times, but use different seeds.
 
-        Not really any great choice for walk_std. High values give erratic animations. Low values keep things smooth,
-        but result in the walk not deviating from the original image much. Could maybe use some combo of taking a step
-        and then interpolating between steps, but might as well just interpolate between completely different seeds.
+        Not really any great choice for walk_std. High values give erratic animations. Low values
+        keep things smooth, but result in the walk not deviating from the original image much. Could
+        maybe use some combo of taking a step and then interpolating between steps, but might as
+        well just interpolate between completely different seeds.
         """
         if height % 8 != 0 or width % 8 != 0:
             raise ValueError('height and width must be divisible by 8')
@@ -312,13 +340,17 @@ class Dreamer:
                     jpg_quality=jpg_quality,
                     tqdm_position=1,
                 )
-            step_latent = torch.normal(0, std=walk_std, size=init_latent.size(), device=self.device, generator=generator)
-            init_latent = (init_latent + step_latent) / (1 + walk_std**2)**0.5  # preserve unit variance
+            step_latent = torch.normal(
+                0, std=walk_std, size=init_latent.size(), device=self.device, generator=generator
+            )
+            init_latent = (init_latent + step_latent) / (
+                1 + walk_std**2
+            ) ** 0.5  # preserve unit variance
 
     def animate_interpolate(
         self,
-        name: str,            # name of this project, subdirectory in the root directory
-        prompts: list[str],   # prompts to dream about
+        name: str,  # name of this project, subdirectory in the root directory
+        prompts: list[str],  # prompts to dream about
         seeds: list[int],
         num_interpolate_steps: int = 75,  # number of steps between each pair of sampled points
         num_inference_steps: int = 50,
@@ -352,7 +384,13 @@ class Dreamer:
         ):
             init_latent_b = self.gen_noise(height, width, seed=seeds[p])
 
-            for i, t in tqdm(enumerate(np.linspace(0, 1, num_interpolate_steps)), total=num_interpolate_steps, desc='interpolate', position=1, leave=False):
+            for _, t in tqdm(
+                enumerate(np.linspace(0, 1, num_interpolate_steps)),
+                total=num_interpolate_steps,
+                desc='interpolate',
+                position=1,
+                leave=False,
+            ):
                 text_embedding = slerp(float(t), text_embedding_a, text_embedding_b)
                 init_latent = slerp(float(t), init_latent_a, init_latent_b)
 

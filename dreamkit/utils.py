@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import torch
-from PIL import Image
-import os
 from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
+from PIL import Image
 
 
 def get_sorted_image_filenames(
-        image_dir: str,
-        image_extension: str = 'jpg',
-        extra_start: int = 0,
-        extra_end: int = 0,
+    image_dir: str,
+    image_extension: str = 'jpg',
+    extra_start: int = 0,
+    extra_end: int = 0,
 ) -> list[str]:
     fns = sorted(
         os.path.join(image_dir, filename)
@@ -73,11 +74,13 @@ def preprocess_image(image: Image, resize: bool = False):
     w, h = image.size
     if w % 32 != 0 or h % 32 != 0:
         if not resize:
-            raise ValueError('image width and height must be divisible by 32 - resize=True to automatically fix this')
+            raise ValueError(
+                'image dimensions must be divisible by 32 - resize=True to automatically fix this'
+            )
         else:
             w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
             image = image.resize((w, h), resample=Image.LANCZOS)
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0, 3, 1, 2)
     image = torch.from_numpy(image)
-    return 2.*image - 1.
+    return 2.0 * image - 1.0
